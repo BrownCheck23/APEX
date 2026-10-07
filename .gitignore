@@ -1,0 +1,7 @@
+.env
+data/*.db
+data/*.db-*
+logs/
+node_modules/
+dist/
+data/robinhood-token.json

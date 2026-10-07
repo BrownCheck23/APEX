@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>APEX Dashboard</title>
+<style>
+  :root { --bg:#0f1115; --card:#181b22; --text:#e6e8ec; --muted:#8b93a1; --line:#2a2f3a; --green:#2ecc71; --red:#e74c3c; --amber:#f5a623; }
+  @media (prefers-color-scheme: light) {
+    :root { --bg:#f5f6f8; --card:#fff; --text:#1b1f27; --muted:#667085; --line:#e2e5ea; --green:#13803f; --red:#c0392b; --amber:#b26a00; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; padding:16px; background:var(--bg); color:var(--text); font:14px/1.45 system-ui, -apple-system, Segoe UI, sans-serif; }
+  header { display:flex; align-items:center; gap:12px; margin-bottom:16px; flex-wrap:wrap; }
+  h1 { font-size:20px; margin:0; letter-spacing:.04em; }
+  .badge { padding:3px 10px; border-radius:999px; font-weight:700; font-size:12px; color:#fff; }
+  .badge.paper { background:var(--green); } .badge.live { background:var(--red); }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:12px; margin-bottom:16px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:12px 14px; }
+  .label { color:var(--muted); font-size:12px; text-transform:uppercase; letter-spacing:.05em; }
+  .value { font-size:22px; font-weight:650; margin-top:4px; font-variant-numeric:tabular-nums; }
+  .sub { color:var(--muted); font-size:12px; margin-top:2px; }
+  .pos { color:var(--green); } .neg { color:var(--red); } .warn { color:var(--amber); }
+  .table-wrap { overflow-x:auto; background:var(--card); border:1px solid var(--line); border-radius:8px; }
+  table { border-collapse:collapse; width:100%; min-width:720px; }
+  th, td { padding:8px 12px; text-align:left; border-bottom:1px solid var(--line); white-space:nowrap; font-variant-numeric:tabular-nums; }
+  th { color:var(--muted); font-size:12px; text-transform:uppercase; letter-spacing:.05em; }
+  td.reason { white-space:normal; color:var(--muted); min-width:220px; }
+  tr:last-child td { border-bottom:none; }
+  #updated { color:var(--muted); font-size:12px; margin-left:auto; }
+  #error { color:var(--red); margin-bottom:12px; display:none; }
+</style>
+</head>
+<body>
+<header>
+  <h1>APEX</h1>
+  <span id="mode" class="badge paper">…</span>
+  <span id="updated"></span>
+</header>
+<div id="error"></div>
+
+<div class="grid">
+  <div class="card"><div class="label">Total P&amp;L</div><div class="value" id="totalPnl">–</div><div class="sub" id="totalPnlPct"></div></div>
+  <div class="card"><div class="label">Today P&amp;L</div><div class="value" id="todayPnl">–</div></div>
+  <div class="card"><div class="label">Win rate</div><div class="value" id="winRate">–</div></div>
+  <div class="card"><div class="label">Trades</div><div class="value" id="tradeCount">–</div><div class="sub" id="openPositions"></div></div>
+  <div class="card"><div class="label">Strategy</div><div class="value" id="strategyVersion">–</div><div class="sub" id="strategyUpdated"></div></div>
+  <div class="card"><div class="label">Kill switch</div><div class="value" id="killSwitch">–</div><div class="sub" id="killReason"></div></div>
+</div>
+
+<div class="label" style="margin:0 0 6px">Last 10 decisions</div>
+<div class="table-wrap">
+  <table>
+    <thead><tr><th>Time</th><th>Symbol</th><th>Regime</th><th>Action</th><th>Qty</th><th>Confidence</th><th>P&amp;L</th><th>Reason</th></tr></thead>
+    <tbody id="decisions"></tbody>
+  </table>
+</div>
+
+<script>
+  // Everything is written with textContent: decision reasons can contain model output.
+  const $ = (id) => document.getElementById(id);
+  const money = (n) => (n < 0 ? '-' : '') + '$' + Math.abs(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const pct = (n, d = 2) => (n * 100).toFixed(d) + '%';
+
+  function setSigned(el, n, text) {
+    el.textContent = text;
+    el.classList.remove('pos', 'neg');
+    el.classList.add(n >= 0 ? 'pos' : 'neg');
+  }
+
+  function cell(tr, text, cls) {
+    const td = document.createElement('td');
+    td.textContent = text;
+    if (cls) td.className = cls;
+    tr.appendChild(td);
+    return td;
+  }
+
+  function render(s) {
+    const mode = $('mode');
+    mode.textContent = s.mode.toUpperCase();
+    mode.className = 'badge ' + s.mode;
+
+    const p = s.portfolio;
+    if (p && !p.unavailable) {
+      setSigned($('totalPnl'), p.totalPnl, money(p.totalPnl));
+      $('totalPnlPct').textContent = pct(p.totalPnlPct) + ' of ' + money(p.startingValue);
+      setSigned($('todayPnl'), p.todayPnl, money(p.todayPnl));
+      $('winRate').textContent = p.tradeCount ? pct(p.winRate, 1) : '–';
+      $('tradeCount').textContent = p.tradeCount;
+      $('openPositions').textContent = p.openPositions.length + ' open';
+    } else {
+      const snap = p && p.lastSnapshot;
+      if (snap) {
+        setSigned($('totalPnl'), snap.total_pnl, money(snap.total_pnl));
+        $('totalPnlPct').textContent = pct(snap.total_pnl_pct) + ' (last snapshot)';
+        $('winRate').textContent = pct(snap.win_rate, 1);
+        $('tradeCount').textContent = snap.trade_count;
+      }
+      $('todayPnl').textContent = '–';
+      $('openPositions').textContent = 'bot not running in this process';
+    }
+
+    $('strategyVersion').textContent = 'v' + s.strategy.version;
+    $('strategyUpdated').textContent = 'updated ' + new Date(s.strategy.updatedAt).toLocaleString();
+
+    const k = s.killSwitch;
+    const ks = $('killSwitch');
+    ks.textContent = k.triggered ? k.level.toUpperCase() : 'OK';
+    ks.classList.remove('pos', 'neg', 'warn');
+    ks.classList.add(k.triggered ? (k.level === 'hard' ? 'neg' : 'warn') : 'pos');
+    $('killReason').textContent = k.reason || '';
+
+    const body = $('decisions');
+    body.textContent = '';
+    for (const d of s.decisions) {
+      const tr = document.createElement('tr');
+      cell(tr, new Date(d.timestamp).toLocaleTimeString());
+      cell(tr, d.symbol);
+      cell(tr, d.regime);
+      cell(tr, d.action);
+      cell(tr, d.quantity ? String(d.quantity) : '–');
+      cell(tr, d.confidence ? d.confidence.toFixed(2) : '–');
+      if (d.pnl === null || d.pnl === undefined) cell(tr, '–');
+      else cell(tr, money(d.pnl) + ' (' + d.pnlPct.toFixed(1) + '%)', d.pnl >= 0 ? 'pos' : 'neg');
+      cell(tr, d.reason || '', 'reason');
+      body.appendChild(tr);
+    }
+    if (!s.decisions.length) {
+      const tr = document.createElement('tr');
+      const td = cell(tr, 'No decisions logged yet');
+      td.colSpan = 8;
+      body.appendChild(tr);
+    }
+  }
+
+  async function refresh() {
+    try {
+      const res = await fetch('/status', { cache: 'no-store' });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      render(await res.json());
+      $('error').style.display = 'none';
+      $('updated').textContent = 'updated ' + new Date().toLocaleTimeString();
+    } catch (e) {
+      $('error').textContent = 'Could not load /status: ' + e.message;
+      $('error').style.display = 'block';
+    }
+  }
+
+  refresh();
+  setInterval(refresh, 10000);
+</script>
+</body>
+</html>
